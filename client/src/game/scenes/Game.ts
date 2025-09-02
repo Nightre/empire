@@ -1,7 +1,7 @@
 import { Scene, Tilemaps } from 'phaser';
 import { client } from '../../main';
-import { to2DArray } from '../utils';
-import { Player } from '../../../../server/src/rooms/schema/MyRoomState';
+import { coordToIndex, indexToCoord, to2DArray } from '../utils';
+import { Cell, Player } from '../../../../server/src/rooms/schema/MyRoomState';
 
 interface IPlayer {
     container: Phaser.GameObjects.Container & {
@@ -24,12 +24,12 @@ export class Game extends Scene {
     map: Tilemaps.Tilemap
     players: Map<string, IPlayer> = new Map;
     cursor: Phaser.GameObjects.Sprite
-
+    ground: Tilemaps.TilemapLayer
     constructor() {
         super('Game');
     }
 
-    createPlayer(sessionId?: string, player?: Player): IPlayer {
+    createPlayer(isSelf: boolean, sessionId: string, player: Player): IPlayer {
         const self = client.getPlayerState(sessionId)!;
 
         const sprite = this.add.sprite(0, 0, 'player', 0).setOrigin(0.5);
@@ -55,11 +55,22 @@ export class Game extends Scene {
 
         const result = { container, sprite };
 
-        if (player && sessionId) {
+        if (!isSelf) {
             client.$(player).listen("x", (x) => { container.x = x; });
             client.$(player).listen("y", (y) => { container.y = y; });
-            this.players.set(sessionId, result);
         }
+        this.players.set(sessionId, result);
+
+        client.$(player).areas.onAdd((area) => {
+            client.$(area).cells.onAdd((item, _) => {
+                const coords = indexToCoord(item, this.map.width)
+                this.ground.setTint(player.color, coords.x, coords.y, 1, 1)
+            })
+            client.$(area).cells.onRemove((item, _) => {
+                const coords = indexToCoord(item, this.map.width)
+                this.ground.setTint(0xffffff, coords.x, coords.y, 1, 1)
+            })
+        })
 
         return result;
     }
@@ -80,15 +91,15 @@ export class Game extends Scene {
         const tiles = map.addTilesetImage('tilemap')!;
 
         const ground = map.createBlankLayer('ground', tiles, 0, 0)!;
-        ground.randomize(0, 0, map.width, map.height, [0, 1, 2, 3]);
+        this.ground = ground
         const buildings = map.createBlankLayer('buildings', tiles, 0, 0)!;
 
-        ground.setCollision([0, 3, 4]);
+        ground.setCollision([0, 3]);
         this.physics.world.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
         this.camera.setBounds(0, 0, map.widthInPixels, map.heightInPixels, true);
 
         // 玩家
-        const playerObj = this.createPlayer();
+        const playerObj = this.createPlayer(true, client.room!.sessionId, client.getPlayerState()!);
         this.playerContainer = playerObj.container;
         this.playerSprite = playerObj.sprite;
         this.physics.add.collider(this.playerContainer, ground);
@@ -122,28 +133,29 @@ export class Game extends Scene {
             const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
             const x = map.worldToTileX(worldPoint.x)!;
             const y = map.worldToTileY(worldPoint.y)!;
-            const index = x + y * state.width;
+            const index = coordToIndex(x, y, state.width);
             client.room?.send("place_tile", { index });
         });
 
-        const t = to2DArray(state.map.toJSON(), state.width);
-        ground.putTilesAt(t, 0, 0);
+        const mapData = state.map.toJSON()
+        const buildingData = state.buildings.toJSON()
+
+        ground.putTilesAt(to2DArray(mapData, state.width), 0, 0);
+        buildings.putTilesAt(to2DArray(buildingData, state.width), 0, 0);
 
         client.$(state).map.onChange((item, index) => {
-            const x = index % state.width;
-            const y = Math.floor(index / state.width);
-            ground.putTileAt(item, x, y);
+            const coords = indexToCoord(index, state.width)
+            ground.putTileAt(item, coords.x, coords.y);
         });
-
-        state.players.forEach((player, key) => {
-            if (key != client.room!.sessionId && !this.players.has(key)) {
-                this.createPlayer(key, player);
-            }
+        
+        client.$(state).buildings.onChange((item, index) => {
+            const coords = indexToCoord(index, state.width)
+            buildings.putTileAt(item, coords.x, coords.y);
         });
 
         client.$(state).players.onAdd((player, key) => {
             if (key != client.room!.sessionId && !this.players.has(key)) {
-                this.createPlayer(key, player);
+                this.createPlayer(false, key, player);
             }
         });
 
@@ -159,7 +171,7 @@ export class Game extends Scene {
     }
 
     update() {
-        const speed = 300;
+        const speed = 150;
         const dir = new Phaser.Math.Vector2(0, 0);
 
         if (this.cursors.left?.isDown || this.wasd.left.isDown) dir.x = -1;
@@ -236,7 +248,7 @@ export class HudScene extends Phaser.Scene {
         this.positionMinimap();
 
         // 初始绘制
-        const mapArray = state.map.toJSON();
+        const mapArray = state.map.toJSON() as number[];
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const index = x + y * width;
