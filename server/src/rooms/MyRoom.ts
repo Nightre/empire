@@ -19,7 +19,7 @@ export class MyRoom extends Room<MyRoomState> {
   }
 
   onJoin(client: Client, options: any) {
-    let index = 0
+    let index = Math.random()
     while (this.state.map[index] != 2) {
       index = Math.round(Math.random() * this.state.width * this.state.height)
     }
