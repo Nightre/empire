@@ -30,6 +30,7 @@ export class Preloader extends Scene {
 
         this.load.image('logo', 'logo.png');
         this.load.image("tilemap", "tilemap.png")
+        this.load.image("cursor", "cursor.png")
         this.load.spritesheet('player', 'player.png', {
             frameWidth: 32,
             frameHeight: 32

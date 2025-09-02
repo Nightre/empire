@@ -7,6 +7,9 @@ import { playground } from "@colyseus/playground";
  */
 import { MyRoom } from "./rooms/MyRoom";
 
+import { Encoder } from "@colyseus/schema";
+Encoder.BUFFER_SIZE = 1024 * 1024; // 1024 KB
+
 export default config({
 
     initializeGameServer: (gameServer) => {

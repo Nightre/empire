@@ -1,8 +1,10 @@
 import GameClient from './client';
 import StartGame from './game/main';
+import "./assets/main.scss"
+import { Scene } from 'phaser';
 
+export const client = new GameClient()
 document.addEventListener('DOMContentLoaded', async () => {
-    const client = new GameClient()
-    await client.join()
     StartGame('game-container');
 });
+

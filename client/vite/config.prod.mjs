@@ -10,11 +10,11 @@ const phasermsg = () => {
             const line = "---------------------------------------------------------";
             const msg = `❤️❤️❤️ Tell us about your game! - games@phaser.io ❤️❤️❤️`;
             process.stdout.write(`${line}\n${msg}\n${line}\n`);
-            
+
             process.stdout.write(`✨ Done ✨\n`);
         }
     }
-}   
+}
 
 export default defineConfig({
     base: './',
@@ -43,5 +43,17 @@ export default defineConfig({
     },
     plugins: [
         phasermsg()
-    ]
+    ],
+    css: {
+        preprocessorOptions: {
+            scss: {
+                silenceDeprecations: [
+                    'import',
+                    'mixed-decls',
+                    'color-functions',
+                    'global-builtin',
+                ],
+            },
+        },
+    },
 });

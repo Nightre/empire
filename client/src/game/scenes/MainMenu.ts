@@ -1,32 +1,31 @@
 import { Scene, GameObjects } from 'phaser';
+import { client } from '../../main';
 
-export class MainMenu extends Scene
-{
+export class MainMenu extends Scene {
     background: GameObjects.Image;
     logo: GameObjects.Image;
     title: GameObjects.Text;
 
-    constructor ()
-    {
+    constructor() {
         super('MainMenu');
     }
 
-    create ()
-    {
+    async create() {
         this.background = this.add.image(512, 384, 'background');
 
         this.logo = this.add.image(512, 300, 'logo');
 
-        this.title = this.add.text(512, 460, '点击开始游戏', {
-            fontFamily: 'Arial Black', fontSize: 38, color: '#ffffff',
-            stroke: '#000000', strokeThickness: 8,
+        this.title = this.add.text(512, 460, '连接服务器中...', {
+            fontFamily: 'Arial Black', fontSize: 18, color: '#00000',
             align: 'center'
         }).setOrigin(0.5);
 
-        this.input.once('pointerdown', () => {
-
+        try {
+            await client.join()
             this.scene.start('Game');
-
-        });
+        } catch (error) {
+            console.log("失败")
+            this.title.text = "连接失败"
+        }
     }
 }

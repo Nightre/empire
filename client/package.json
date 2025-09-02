@@ -24,8 +24,11 @@
         "vite": "^6.3.1"
     },
     "dependencies": {
+        "@popperjs/core": "^2.11.8",
+        "bootstrap": "^5.3.8",
         "colyseus.js": "^0.16.19",
         "phaser": "^3.90.0",
+        "sass": "^1.91.0",
         "terser": "^5.39.0"
     }
 }
