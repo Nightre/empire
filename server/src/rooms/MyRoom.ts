@@ -1,5 +1,5 @@
 import { Room, Client } from "@colyseus/core";
-import { MyRoomState, Player, Cell, Connect, Item } from "./schema/MyRoomState";
+import { MyRoomState, Player, Cell, Connect, Item, Entity } from "./schema/MyRoomState";
 import { v4 as uuidv4 } from "uuid";
 
 // 接口定义保持不变
@@ -76,10 +76,12 @@ export class MyRoom extends Room<MyRoomState> {
             this.state.map.forEach((cell) => {
                 cell.output.forEach((connectId) => {
                     // 从 cell 的 output map 中得到 connectId
-                    this.addItem(connectId, "茶");
+                    this.addItem(connectId, "钢筋", "🪴");
                 });
             });
         }, 2000); // 降低频率以方便观察
+
+        this.addEntity(0, 0)
     }
 
     onJoin(client: Client, options: any) {
@@ -104,15 +106,24 @@ export class MyRoom extends Room<MyRoomState> {
 
 
     // REWRITTEN: addItem 现在接受 connectId
-    addItem(connectId: string, name: string) {
+    addItem(connectId: string, name: string, emoji: string) {
         if (!this.state.connects.has(connectId)) return; // 安全检查
 
         const item = new Item().assign({
             name,
-            connectId: connectId,
-            process: 0 // 确保从 0 开始
+            connectId,
+            emoji,
+            process: 0
         });
         this.state.items.set(uuidv4(), item);
+    }
+
+    addEntity(x: number, y: number) {
+        const entity = new Entity().assign({
+            x,
+            y
+        });
+        this.state.entities.set(uuidv4(), entity);
     }
 
     // REWRITTEN: 完全重写以适应新结构

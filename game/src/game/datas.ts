@@ -1,8 +1,11 @@
+import { Wall, type RemoteTile } from "./scene/main";
+
 export const items: Record<string, string[]> = {
     '资源': [
         'classifier',
         'miner',
         'incinerator',
+        'wall'
     ],
     '人民': [],
     '防御': [],
@@ -15,6 +18,7 @@ export interface ITileInfo {
     describe: string;
     inputs?: string[];
     outputs?: string[];
+    type?: typeof RemoteTile
 }
 
 export const tiles: Record<string, ITileInfo> = {
@@ -43,5 +47,11 @@ export const tiles: Record<string, ITileInfo> = {
         name: "资源",
         image: "./resource.svg",
         describe: "资源",
+    },
+    'wall': {
+        name: "墙壁",
+        image: "./wall.svg",
+        describe: "墙壁",
+        type: Wall
     }
 }

@@ -25,7 +25,7 @@ import { v4 as uuidv4 } from 'uuid';
 // }
 
 export class Connect extends Schema {
-    @type('string') id: string = uuidv4();
+    id: string = uuidv4();
 
     @type('string') sourceCellId: string;
     @type('string') sourceSlotKey: string;
@@ -53,6 +53,8 @@ export class Connect extends Schema {
 
 export class Item extends Schema {
     @type('string') name: string;
+    @type('string') emoji: string;
+
     @type("number") process: number;
     @type('string') connectId: string;
 
@@ -75,12 +77,20 @@ export class Player extends Schema {
     @type("number") color: number = randomBrightColor();
 }
 
+export class Entity extends Schema {
+    @type("string") prototypeId: string;
+    @type("number") x = 0;
+    @type("number") y = 0;
+    @type("number") hp = 100;
+}
+
 export class MyRoomState extends Schema {
     @type({ map: Player }) players = new MapSchema<Player>();
     @type({ map: Cell }) map = new MapSchema<Cell>();
 
     @type({ map: Item }) items = new MapSchema<Item>();
     @type({ map: Connect }) connects = new MapSchema<Connect>()
+    @type({ map: Entity }) entities = new MapSchema<Entity>()
 
     @type("number") width: number = 0;
     @type("number") height: number = 0;

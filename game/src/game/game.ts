@@ -197,6 +197,8 @@ export class Game {
             { url: "./classifier.svg", name: "classifier" },
             { url: "./miner.svg", name: "miner" },
             { url: "./incinerator.svg", name: "incinerator" },
+            { url: "./wall.svg", name: "wall" },
+            { url: "./zombie.svg", name: "zombie" }
         ])
     }
 

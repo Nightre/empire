@@ -8,9 +8,14 @@ import GameClient from "@/client";
 import type { Cell } from "../../../../server/src/rooms/schema/MyRoomState";
 import { tiles } from "../datas";
 
+export enum IO_TYPE {
+    INPUT,
+    OUTPUT
+}
+
 export interface ILinkData {
-    tileId: string,
-    output: string
+    slot: string,
+    type: IO_TYPE
 }
 
 class Grid extends GameObject {
@@ -196,11 +201,39 @@ export class Tile extends GameObject {
     }
 }
 
-class RemoteTile extends Tile {
+export class RemoteTile extends Tile {
     cellData: Cell
     constructor(game: Game, cell: Cell, id: string) {
         super(game, id, cell.prototypeId)
         this.cellData = cell
+    }
+}
+
+export class Wall extends RemoteTile {
+    static DIRS = [
+        new Vec2(1, 0),
+        new Vec2(0, 1),
+        new Vec2(0, -1),
+        new Vec2(-1, 0),
+
+        new Vec2(1, 1),
+        new Vec2(-1, -1),
+        new Vec2(1, -1),
+        new Vec2(-1, 1),
+    ]
+    render(ctx: CanvasRenderingContext2D): void {
+        ctx.lineWidth = 3
+        ctx.strokeStyle = "#3f3f3fff"
+        Wall.DIRS.forEach((dir) => {
+            if (mainStage.grid.getBlockByPos(this.cell.clone().add(dir))?.prototypeId == this.prototypeId) {
+                ctx.beginPath()
+                ctx.moveTo(32, 32)
+                ctx.lineTo(32 + dir.x * 64, 32 + dir.y * 64)
+                ctx.stroke()
+            }
+        })
+        super.render(ctx)
+
     }
 }
 
@@ -239,6 +272,17 @@ class SelectedCusor extends Tile {
     }
 }
 
+class Entity extends GameObject {
+    render(ctx: CanvasRenderingContext2D): void {
+        const image = this.asset("zombie")!
+        ctx.drawImage(image, image.width / -2, image.height / -2)
+    }
+    protected onUpdate(deltaTime: number): void {
+        this.rotation += deltaTime * Math.PI
+        this.setDirty()
+    }
+}
+
 class Lines extends GameObject {
     gird: Grid
     constructor(game: Game, gird: Grid) {
@@ -246,6 +290,7 @@ class Lines extends GameObject {
         this.gird = gird
     }
     render(ctx: CanvasRenderingContext2D): void {
+        const isSmall = this.getCamera().zoom < 0.3
         const state = mainStage.client.state
         Object.values(this.gird.cell).forEach(tile => {
             tile.cellData.output.forEach((connectId, slot) => {
@@ -263,28 +308,30 @@ class Lines extends GameObject {
                 ctx.moveTo(s.x + 32, s.y + 32)
                 ctx.lineTo(t.x + 32, t.y + 32)
                 ctx.stroke()
-
-                ctx.beginPath()
-                ctx.lineWidth = 10
-                ctx.strokeStyle = "#989898ff"
-                ctx.moveTo(s.x + 32, s.y + 32)
-                ctx.lineTo(t.x + 32, t.y + 32)
-                ctx.stroke()
+                if (!isSmall) {
+                    ctx.beginPath()
+                    ctx.lineWidth = 10
+                    ctx.strokeStyle = "#989898ff"
+                    ctx.moveTo(s.x + 32, s.y + 32)
+                    ctx.lineTo(t.x + 32, t.y + 32)
+                    ctx.stroke()
+                }
             })
         })
+        if (!isSmall) {
+            const offset = new Vec2(32, 32)
+            mainStage.items.forEach((item, id) => {
+                const connect = state.connects.get(item.connectId)!
+                if (connect) {
+                    const s = this.gird.getBlockById(connect.sourceCellId).getGlobalPosition()
+                    const t = this.gird.getBlockById(connect.targetCellId).getGlobalPosition()
 
-        const offset = new Vec2(32, 32)
-        mainStage.items.forEach((item, id) => {
-            const connect = state.connects.get(item.connectId)!
-            if (connect) {
-                const s = this.gird.getBlockById(connect.sourceCellId).getGlobalPosition()
-                const t = this.gird.getBlockById(connect.targetCellId).getGlobalPosition()
-
-                const dir = t.clone().subtract(s).normalize()
-                item.position = s.clone().add(dir.multiplyScalar(item.process * 64)).add(offset)
-                item.setDirty()                
-            }
-        })
+                    const dir = t.clone().subtract(s).normalize()
+                    item.position = s.clone().add(dir.multiplyScalar(item.process * 64)).add(offset)
+                    item.setDirty()
+                }
+            })
+        }
     }
 }
 
@@ -293,18 +340,60 @@ class Item extends GameObject {
     id: string
     name: string
     connectId: string
+    emoji: string
 
-    constructor(name: string, id: string, connectId: string, game: Game) {
+    showText: boolean = false
+    constructor(name: string, id: string, connectId: string, emoji: string, game: Game) {
         super(game)
         this.id = id
         this.name = name
+        this.emoji = emoji
         this.connectId = connectId
+    }
+
+    protected onUpdate(deltaTime: number): void {
+        this.visible = !(this.getCamera().zoom < 0.3)
+        this.showText = mainStage.mousePosition.clone().subtract(this.getGlobalPosition()).length() < 30
     }
     render(ctx: CanvasRenderingContext2D): void {
         ctx.fillStyle = "#000000ff"
-        ctx.fillRect(-5, -5, 10, 10)
+        const size = 32
+        ctx.fillRect(-size / 2, -size / 2, size, size)
         ctx.fillStyle = "#ffffffff"
-        ctx.fillRect(-4, -4, 8, 8)
+        ctx.fillRect(1 - size / 2, 1 - size / 2, size - 2, size - 2)
+
+        ctx.fillStyle = "#000000ff"
+        ctx.font = "24px serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(this.emoji, 0, 0);
+
+        if (this.showText) {
+            ctx.font = "24px serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+
+            const text = this.name;
+            const x = 0;
+            const y = -25;
+
+            const metrics = ctx.measureText(text);
+            const padding = 6;
+            const textWidth = metrics.width;
+            const textHeight = 24;
+
+            ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+            ctx.fillRect(
+                x - textWidth / 2 - padding,
+                y - textHeight / 2 - padding,
+                textWidth + padding * 2,
+                textHeight + padding * 2
+            );
+
+            // 绘制文字
+            ctx.fillStyle = "#fff"; // 白字更清晰
+            ctx.fillText(text, x, y);
+        }
     }
     onChange(process: number) {
         this.process = process
@@ -312,7 +401,7 @@ class Item extends GameObject {
 }
 
 export class MainScene extends GameObject {
-    private grid!: Grid;
+    grid!: Grid;
     private buildCusor!: BuildCusor;
     private selectCusor!: SelectedCusor
     private canvas!: HTMLCanvasElement;
@@ -324,11 +413,15 @@ export class MainScene extends GameObject {
     client: GameClient
 
     selectedItem: string | null = null
-    selectedTile: Tile | null = null
+    selectedSourceTile: Tile | null = null
     selectedTargetTile: Tile | null = null
 
     linkData: ILinkData | null = null
     items: Map<string, Item> = new Map
+    entities: Map<string, Entity> = new Map
+
+
+    mousePosition: Vec2 = new Vec2(0, 0)
 
     constructor(game: Game) {
         super(game);
@@ -338,25 +431,59 @@ export class MainScene extends GameObject {
         })
     }
 
-    setOutputLink(tileId: string, output: string) {
+    setConnectSource(slot: string, type: IO_TYPE) {
         this.linkData = {
-            tileId,
-            output
+            slot, type
         }
         this.game.store.setSelectingLink(this.linkData)
     }
-    setInputLink(tileId: string, input: string) {
-        this.selectTile(null)
-        this.connect(
-            this.linkData!.tileId,
-            this.linkData!.output,
 
-            tileId,
-            input,
-        )
+    setConnectTarget(slot: string) {
+        switch (this.linkData?.type) {
+            case IO_TYPE.INPUT:
+                this.connect(
+                    this.selectedTargetTile!.id,
+                    slot,
+
+                    this.selectedSourceTile!.id,
+                    this.linkData!.slot,
+                )
+                break;
+            case IO_TYPE.OUTPUT:
+                this.connect(
+                    this.selectedSourceTile!.id,
+                    this.linkData!.slot,
+
+                    this.selectedTargetTile!.id,
+                    slot,
+                )
+                break;
+        }
+
+        this.selectTile(null)
         this.linkData = null
         this.game.store.setSelectingLink(this.linkData)
     }
+
+    // setOutputLink(tileId: string, output: string) {
+    //     this.linkData = {
+    //         tileId,
+    //         slot: output
+    //     }
+    //     this.game.store.setSelectingLink(this.linkData)
+    // }
+    // setInputLink(tileId: string, input: string) {
+    //     this.connect(
+    //         this.selectedSourceTile!.id,
+    //         this.linkData!.slot,
+
+    //         this.selectedTargetTile!.id,
+    //         input,
+    //     )
+    //     this.selectTile(null)
+    //     this.linkData = null
+    //     this.game.store.setSelectingLink(this.linkData)
+    // }
 
     connect(sourceCellId: string, sourceSlotKey: string, targetCellId: string, targetSlotKey: string) {
         this.client.room.send("connect", { sourceCellId, sourceSlotKey, targetCellId, targetSlotKey })
@@ -398,7 +525,8 @@ export class MainScene extends GameObject {
         const clinet = this.client
 
         clinet.$(stage).map.onAdd((item, id) => {
-            const block = new RemoteTile(this.game, item, id);
+            const Z = tiles[item.prototypeId].type ?? RemoteTile
+            const block = new Z(this.game, item, id);
             this.grid.addBlock(block, new Vec2(item.x, item.y))
         })
 
@@ -407,18 +535,38 @@ export class MainScene extends GameObject {
         })
 
         clinet.$(stage).items.onAdd((item, id) => {
-            const itemObj = new Item(item.name, id, item.connectId, this.game)
+            const itemObj = new Item(item.name, id, item.connectId, item.emoji, this.game)
             this.addChild(itemObj)
             this.items.set(id, itemObj)
 
             clinet.$(item).listen("process", (process) => {
-                this.items.get(id)?.onChange(process)
+                itemObj.onChange(process)
             })
         })
 
         clinet.$(stage).items.onRemove((item, id) => {
             this.items.get(id)?.destory()
             this.items.delete(id)
+        })
+
+        clinet.$(stage).entities.onAdd((entity, id) => {
+            const itemObj = new Entity(this.game)
+            itemObj.x = entity.x
+            itemObj.y = entity.y
+            this.addChild(itemObj)
+            this.entities.set(id, itemObj)
+
+            clinet.$(entity).listen("x", (x) => {
+                itemObj.x = x
+            })
+            clinet.$(entity).listen("y", (y) => {
+                itemObj.y = y
+            })
+        })
+
+        clinet.$(stage).entities.onRemove((entity, id) => {
+            this.entities.get(id)?.destory()
+            this.entities.delete(id)
         })
     }
 
@@ -453,7 +601,7 @@ export class MainScene extends GameObject {
     }
 
     selectTile(tile: Tile | null) {
-        let targetTile = this.linkData ? this.selectedTargetTile : this.selectedTile
+        let targetTile = this.linkData ? this.selectedTargetTile : this.selectedSourceTile
         if (tile && targetTile != tile) {
             targetTile = tile
             this.selectCusor.gotoCell(tile.cell, this.grid)
@@ -465,7 +613,7 @@ export class MainScene extends GameObject {
         if (this.linkData) {
             this.selectedTargetTile = targetTile
         } else {
-            this.selectedTile = targetTile
+            this.selectedSourceTile = targetTile
         }
         this.updateSelectedTile()
     }
@@ -515,6 +663,8 @@ export class MainScene extends GameObject {
     };
 
     private onMouseMove = (event: MouseEvent) => {
+        const currentMousePos = toCoords(event, this.game);
+        this.mousePosition = this.getCamera().screenToWorld(currentMousePos.clone())
         this.mouseCell = this.grid.getMouseGridPos(event);
         this.buildCusor.gotoCell(this.mouseCell, this.grid)
         if (this.selectedItem) {
@@ -525,7 +675,7 @@ export class MainScene extends GameObject {
         if (!this.isDragging) return;
         this.clickTile(null)
 
-        const currentMousePos = toCoords(event, this.game);
+
         const delta = Vec2.subtract(currentMousePos, this.lastMousePosition);
 
         // 使用 this.game 访问 game 实例
@@ -534,7 +684,6 @@ export class MainScene extends GameObject {
         this.game.mainCamera.setDirty();
 
         this.lastMousePosition.copyFrom(currentMousePos);
-
     };
 
     private onMouseUpOrLeave = (event: MouseEvent) => {
@@ -563,7 +712,7 @@ export class MainScene extends GameObject {
     };
 
     updateSelectedTile() {
-        this.game.store.selectTile(this.selectedTile?.toJson() ?? null)
+        this.game.store.selectTile(this.selectedSourceTile?.toJson() ?? null)
         if (this.linkData) {
             this.game.store.selectTargetTile(this.selectedTargetTile?.toJson() ?? null)
         }
