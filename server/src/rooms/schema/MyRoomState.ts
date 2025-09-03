@@ -2,11 +2,72 @@ import { ArraySchema, MapSchema, Schema, SetSchema, type } from "@colyseus/schem
 import alea from "alea";
 import { createNoise2D } from 'simplex-noise';
 import { randomBrightColor } from "../../utils";
+import { v4 as uuidv4 } from 'uuid';
+
+// export class LineItem {
+//     name: string
+//     process: number = 0
+//     connect: Connect
+//     start: Cell
+//     id: string = uuidv4()
+//     state: MyRoomState
+
+//     constructor(state: MyRoomState, start: Cell, name: string, connect: Connect) {
+//         this.name = name
+//         this.start = start
+//         this.connect = connect
+//         this.state = state
+//     }
+
+//     move(dt: number) {
+//         this.process += 1 * dt
+//     }
+// }
+
+export class Connect extends Schema {
+    @type('string') id: string = uuidv4();
+
+    @type('string') sourceCellId: string;
+    @type('string') sourceSlotKey: string;
+
+    @type('string') targetCellId: string;
+    @type('string') targetSlotKey: string;
+
+    @type('number') length: number;
+
+    calcLength(state: MyRoomState) {
+        const source = state.map.get(this.sourceCellId);
+        const target = state.map.get(this.targetCellId);
+
+        // 添加安全检查
+        if (!source || !target) {
+            this.length = 0;
+            return;
+        }
+
+        const dx = source.x - target.x;
+        const dy = source.y - target.y;
+        this.length = Math.sqrt(dx * dx + dy * dy);
+    }
+}
+
+export class Item extends Schema {
+    @type('string') name: string;
+    @type("number") process: number;
+    @type('string') connectId: string;
+
+    move(dt: number) {
+        this.process += 1 * dt
+    }
+}
 
 export class Cell extends Schema {
-    @type('string') type: string
+    @type('string') prototypeId: string;
     @type("number") x: number;
     @type("number") y: number;
+
+    @type({ map: 'string' }) input = new MapSchema<string>()
+    @type({ map: 'string' }) output = new MapSchema<string>()
 }
 
 export class Player extends Schema {
@@ -16,7 +77,10 @@ export class Player extends Schema {
 
 export class MyRoomState extends Schema {
     @type({ map: Player }) players = new MapSchema<Player>();
-    @type([Cell]) map = new ArraySchema<Cell>();
+    @type({ map: Cell }) map = new MapSchema<Cell>();
+
+    @type({ map: Item }) items = new MapSchema<Item>();
+    @type({ map: Connect }) connects = new MapSchema<Connect>()
 
     @type("number") width: number = 0;
     @type("number") height: number = 0;
@@ -26,7 +90,7 @@ export class MyRoomState extends Schema {
         this.width = width;
         this.height = height;
 
-        this.map = new ArraySchema<Cell>();
+        this.map = new MapSchema<Cell>();
         const occupiedPositions = new Set<string>(); // 用 "x_y" 保存占用格子
 
         let count = 0;
@@ -42,10 +106,10 @@ export class MyRoomState extends Schema {
             const cell = new Cell().assign({
                 x,
                 y,
-                type: "resource",
+                prototypeId: "resource",
             });
 
-            this.map.push(cell);
+            this.map.set(uuidv4(), cell);
             occupiedPositions.add(key);
             count++;
         }

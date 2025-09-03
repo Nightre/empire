@@ -4,13 +4,18 @@ import type { Game } from "../game";
 import { GameObject } from "../GameObject";
 import { toCoords } from "../utils";
 import { Vec2 } from "../Vec2";
-import type { IBuildItem } from "@/views/HomeView.vue";
 import GameClient from "@/client";
 import type { Cell } from "../../../../server/src/rooms/schema/MyRoomState";
+import { tiles } from "../datas";
+
+export interface ILinkData {
+    tileId: string,
+    output: string
+}
 
 class Grid extends GameObject {
     gridSize: number;
-    cell: Tile[] = []
+    cell: Record<string, RemoteTile> = {}
 
     constructor(game: Game, gridSize: number = 64) {
         super(game);
@@ -18,8 +23,8 @@ class Grid extends GameObject {
         this.zIndex = -100; // 确保网格永远在最底层
     }
 
-    addBlock(block: Tile, cell: Vec2) {
-        this.cell.push(block)
+    addBlock(block: RemoteTile, cell: Vec2) {
+        this.cell[block.id] = block
         block.gotoCell(cell, this)
         this.addChild(block)
     }
@@ -28,8 +33,6 @@ class Grid extends GameObject {
         const camera = this.game.mainCamera;
         const scaler = this.game.scaler;
         if (!camera || !scaler) return;
-
-
 
         if (camera.zoom > 0.3) {
             const topLeft = camera.screenToWorld(new Vec2(0, 0));
@@ -120,13 +123,17 @@ class Grid extends GameObject {
     //     mainScene.build()
     // }
 
-    getBlock(vec: Vec2) {
-        return this.cell.filter(c => c.cell.equals(vec))?.[0]
+    getBlockByPos(vec: Vec2) {
+        return Object.values(this.cell).filter(c => c.cell.equals(vec))?.[0]
+    }
+    getBlockById(id: string) {
+        return this.cell[id]
     }
 }
 
-export interface ITile {
-    name: string,
+export interface ISelectedTile {
+    prototypeId: string,
+    tileId: string,
     x: number,
     y: number,
 
@@ -135,11 +142,24 @@ export interface ITile {
 }
 
 export class Tile extends GameObject {
-    image: HTMLCanvasElement
+    image!: HTMLCanvasElement
     cell: Vec2 = new Vec2
-    constructor(game: Game) {
+    id: string = ''
+    prototypeId!: string
+
+    constructor(game: Game, id: string, prototypeId?: string) {
         super(game);
-        this.image = this.asset("resource") as HTMLCanvasElement
+        this.id = id
+        if (prototypeId) {
+            this.setPrototypeId(prototypeId)
+        } else {
+            this.image = this.asset("resource") as HTMLCanvasElement
+        }
+    }
+
+    setPrototypeId(prototypeId: string) {
+        this.prototypeId = prototypeId
+        this.image = this.asset(tiles[prototypeId].image) as HTMLCanvasElement
     }
 
     render(ctx: CanvasRenderingContext2D): void {
@@ -158,15 +178,16 @@ export class Tile extends GameObject {
         this.setDirty()
     }
 
-    toJson(): ITile {
-
+    toJson(): ISelectedTile {
         const game = this.game
         const worldPos = game.mainCamera.worldToScreen(
             this.position.clone().add(new Vec2(32, 0)),
         );
 
         return {
-            name: "sb",
+            prototypeId: this.prototypeId,
+            tileId: this.id,
+
             x: this.cell.x,
             y: this.cell.y,
             worldx: worldPos.x / this.game.scaler.dpr,
@@ -177,14 +198,19 @@ export class Tile extends GameObject {
 
 class RemoteTile extends Tile {
     cellData: Cell
-    constructor(game: Game, cell: Cell) {
-        super(game)
+    constructor(game: Game, cell: Cell, id: string) {
+        super(game, id, cell.prototypeId)
         this.cellData = cell
     }
 }
 
 class BuildCusor extends Tile {
     canBuild: boolean = true
+
+    constructor(game: Game) {
+        super(game, 'build')
+    }
+
     setCanBuild(newCanBuild: boolean) {
         this.canBuild = newCanBuild
     }
@@ -201,11 +227,87 @@ class BuildCusor extends Tile {
 }
 
 class SelectedCusor extends Tile {
+    constructor(game: Game) {
+        super(game, 'select')
+    }
+
     render(ctx: CanvasRenderingContext2D): void {
         ctx.beginPath()
         ctx.arc(32, 32, 45, 0, Math.PI * 2)
         ctx.fillStyle = 'rgba(155, 255, 144, 0.49)'
         ctx.fill()
+    }
+}
+
+class Lines extends GameObject {
+    gird: Grid
+    constructor(game: Game, gird: Grid) {
+        super(game)
+        this.gird = gird
+    }
+    render(ctx: CanvasRenderingContext2D): void {
+        const state = mainStage.client.state
+        Object.values(this.gird.cell).forEach(tile => {
+            tile.cellData.output.forEach((connectId, slot) => {
+                const connect = state.connects.get(connectId)!
+                const s = tile.getGlobalPosition()
+                const t = this.gird.getBlockById(connect.targetCellId).getGlobalPosition()
+                const dir = t.clone().subtract(s).normalize()
+
+                t.add(dir.clone().multiplyScalar(-32))
+                s.add(dir.clone().multiplyScalar(32))
+
+                ctx.beginPath()
+                ctx.lineWidth = 15
+                ctx.strokeStyle = "#3f3f3fff"
+                ctx.moveTo(s.x + 32, s.y + 32)
+                ctx.lineTo(t.x + 32, t.y + 32)
+                ctx.stroke()
+
+                ctx.beginPath()
+                ctx.lineWidth = 10
+                ctx.strokeStyle = "#989898ff"
+                ctx.moveTo(s.x + 32, s.y + 32)
+                ctx.lineTo(t.x + 32, t.y + 32)
+                ctx.stroke()
+            })
+        })
+
+        const offset = new Vec2(32, 32)
+        mainStage.items.forEach((item, id) => {
+            const connect = state.connects.get(item.connectId)!
+            if (connect) {
+                const s = this.gird.getBlockById(connect.sourceCellId).getGlobalPosition()
+                const t = this.gird.getBlockById(connect.targetCellId).getGlobalPosition()
+
+                const dir = t.clone().subtract(s).normalize()
+                item.position = s.clone().add(dir.multiplyScalar(item.process * 64)).add(offset)
+                item.setDirty()                
+            }
+        })
+    }
+}
+
+class Item extends GameObject {
+    process: number = 0
+    id: string
+    name: string
+    connectId: string
+
+    constructor(name: string, id: string, connectId: string, game: Game) {
+        super(game)
+        this.id = id
+        this.name = name
+        this.connectId = connectId
+    }
+    render(ctx: CanvasRenderingContext2D): void {
+        ctx.fillStyle = "#000000ff"
+        ctx.fillRect(-5, -5, 10, 10)
+        ctx.fillStyle = "#ffffffff"
+        ctx.fillRect(-4, -4, 8, 8)
+    }
+    onChange(process: number) {
+        this.process = process
     }
 }
 
@@ -221,8 +323,12 @@ export class MainScene extends GameObject {
 
     client: GameClient
 
-    selectedItem: IBuildItem | null = null
+    selectedItem: string | null = null
     selectedTile: Tile | null = null
+    selectedTargetTile: Tile | null = null
+
+    linkData: ILinkData | null = null
+    items: Map<string, Item> = new Map
 
     constructor(game: Game) {
         super(game);
@@ -230,6 +336,30 @@ export class MainScene extends GameObject {
         this.client.join().then(() => {
             this.start()
         })
+    }
+
+    setOutputLink(tileId: string, output: string) {
+        this.linkData = {
+            tileId,
+            output
+        }
+        this.game.store.setSelectingLink(this.linkData)
+    }
+    setInputLink(tileId: string, input: string) {
+        this.selectTile(null)
+        this.connect(
+            this.linkData!.tileId,
+            this.linkData!.output,
+
+            tileId,
+            input,
+        )
+        this.linkData = null
+        this.game.store.setSelectingLink(this.linkData)
+    }
+
+    connect(sourceCellId: string, sourceSlotKey: string, targetCellId: string, targetSlotKey: string) {
+        this.client.room.send("connect", { sourceCellId, sourceSlotKey, targetCellId, targetSlotKey })
     }
 
     start() {
@@ -241,6 +371,7 @@ export class MainScene extends GameObject {
         this.grid = new Grid(game, 64);
 
         this.addChild(camera);
+        this.addChild(new Lines(game, this.grid))
         this.grid.camera = camera;
 
         this.grid.addChild(this.buildCusor);
@@ -260,21 +391,34 @@ export class MainScene extends GameObject {
 
         this.selectItem(null)
         this.selectTile(null)
-
-
     }
 
     private createInitialBlocks() {
         const stage = this.client.state
         const clinet = this.client
 
-        clinet.$(stage).map.onAdd((item: Cell) => {
-            const block = new RemoteTile(this.game, item);
+        clinet.$(stage).map.onAdd((item, id) => {
+            const block = new RemoteTile(this.game, item, id);
             this.grid.addBlock(block, new Vec2(item.x, item.y))
         })
 
-        clinet.$(stage).map.onRemove((item: Cell) => {
-            this.grid.getBlock(new Vec2(item.x, item.y))?.destory()
+        clinet.$(stage).map.onRemove((_, id) => {
+            this.grid.getBlockById(id).destory()
+        })
+
+        clinet.$(stage).items.onAdd((item, id) => {
+            const itemObj = new Item(item.name, id, item.connectId, this.game)
+            this.addChild(itemObj)
+            this.items.set(id, itemObj)
+
+            clinet.$(item).listen("process", (process) => {
+                this.items.get(id)?.onChange(process)
+            })
+        })
+
+        clinet.$(stage).items.onRemove((item, id) => {
+            this.items.get(id)?.destory()
+            this.items.delete(id)
         })
     }
 
@@ -294,26 +438,36 @@ export class MainScene extends GameObject {
         this.canvas.removeEventListener('wheel', this.onWheel);
     }
 
-    selectItem(item: IBuildItem | null) {
+    selectItem(item: string | null) {
         this.clickTile(null)
         this.selectedItem = item
+
         if (this.selectedItem) {
+            const prototype = tiles[this.selectedItem]
             this.buildCusor.visible = true
-            this.buildCusor.image = this.buildCusor.asset(item!.iamge) as HTMLCanvasElement
+            this.buildCusor.image = this.buildCusor.asset(prototype.image) as HTMLCanvasElement
         } else {
             this.buildCusor.visible = false
         }
+        this.game.store.selectItem(this.selectedItem)
     }
 
     selectTile(tile: Tile | null) {
-        if (tile && this.selectedTile != tile) {
-            this.selectedTile = tile
+        let targetTile = this.linkData ? this.selectedTargetTile : this.selectedTile
+        if (tile && targetTile != tile) {
+            targetTile = tile
             this.selectCusor.gotoCell(tile.cell, this.grid)
             this.selectCusor.visible = true
         } else {
-            this.selectedTile = null
+            targetTile = null
             this.selectCusor.visible = false
         }
+        if (this.linkData) {
+            this.selectedTargetTile = targetTile
+        } else {
+            this.selectedTile = targetTile
+        }
+        this.updateSelectedTile()
     }
 
     canBuild(vec: Vec2) {
@@ -321,27 +475,30 @@ export class MainScene extends GameObject {
         if (vec.x < 0 || vec.y < 0 || vec.x > state.width || vec.y > state.height) {
             return false
         }
-        if (this.grid.getBlock(vec)) {
+        if (this.grid.getBlockByPos(vec)) {
             return false
         }
         return true
     }
 
     clickBuild() {
+        this.client.room.send("build", {
+            prototypeId: this.selectedItem,
+            x: this.mouseCell.x,
+            y: this.mouseCell.y
+        })
         this.selectItem(null)
-        this.game.store.selectItem(this.selectedItem)
     }
 
     clickTile(block: Tile | null) {
         this.selectTile(block)
-        this.game.store.selectTile(this.selectedTile?.toJson() ?? null)
     }
 
     onGirdClick() {
-        const block = this.grid.getBlock(this.mouseCell)
+        const block = this.grid.getBlockByPos(this.mouseCell)
         if (block && this.selectedItem == null) {
             this.clickTile(block)
-        } else if (this.canBuild(this.mouseCell)) {
+        } else if (this.selectedItem && this.canBuild(this.mouseCell)) {
             this.clickBuild()
         }
     }
@@ -354,7 +511,6 @@ export class MainScene extends GameObject {
             this.onGirdClick()
         } else if (event.button === 2) {
             this.selectItem(null)
-            this.game.store.selectItem(null)
         }
     };
 
@@ -364,6 +520,7 @@ export class MainScene extends GameObject {
         if (this.selectedItem) {
             this.buildCusor.setCanBuild(this.canBuild(this.mouseCell))
         }
+        this.updateSelectedTile()
 
         if (!this.isDragging) return;
         this.clickTile(null)
@@ -377,6 +534,7 @@ export class MainScene extends GameObject {
         this.game.mainCamera.setDirty();
 
         this.lastMousePosition.copyFrom(currentMousePos);
+
     };
 
     private onMouseUpOrLeave = (event: MouseEvent) => {
@@ -401,10 +559,19 @@ export class MainScene extends GameObject {
         this.game.mainCamera.x -= dx / this.game.mainCamera.zoom;
         this.game.mainCamera.y -= dy / this.game.mainCamera.zoom;
 
-        this.game.store.selectTile(this.selectedTile?.toJson() ?? null)
+        this.updateSelectedTile()
     };
+
+    updateSelectedTile() {
+        this.game.store.selectTile(this.selectedTile?.toJson() ?? null)
+        if (this.linkData) {
+            this.game.store.selectTargetTile(this.selectedTargetTile?.toJson() ?? null)
+        }
+    }
 }
 
+export let mainStage: MainScene
 export const start = (game: Game) => {
     game.stage = new MainScene(game);
+    mainStage = game.stage as MainScene
 };

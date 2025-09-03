@@ -1,6 +1,8 @@
 import { Client, getStateCallbacks, Room } from "colyseus.js";
 import { MyRoomState } from "../../server/src/rooms/schema/MyRoomState"
 
+
+
 class GameClient {
     client: Client
     room!: Room<MyRoomState>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import TilePanel from '@/components/TilePanel.vue';
+import { items, tiles } from '@/game/datas';
 import { Game } from '@/game/game';
-import type { MainScene } from '@/game/scene/main';
+import { mainStage, type MainScene } from '@/game/scene/main';
 import { useGameStore } from '@/stores/game';
 import { storeToRefs } from 'pinia';
 import { onMounted, onUnmounted, reactive, ref } from 'vue';
@@ -10,16 +12,10 @@ const game = new Game()
 const loadingAssets = ref(true)
 const loadingProgress = ref(0)
 
-export interface IBuildItem {
-  name: string,
-  id: string,
-  iamge: string,
-  describe: string
-}
 const store = useGameStore()
-const { category, selectedItem, selectedTile } = storeToRefs(store)
+const { selectedItem, selectedTile, selectedTargetTile } = storeToRefs(store)
 
-const selectedCategory = ref<string>(Object.keys(category)[0])
+const selectedCategory = ref<string>(Object.keys(items)[0])
 
 onMounted(async () => {
   game.assets.on("complete", () => loadingAssets.value = false)
@@ -37,12 +33,6 @@ function selectCategory(name: string) {
     selectedCategory.value = name
   }
 }
-
-function selectItem(item: IBuildItem) {
-  store.selectItem(item)
-  const mainScene = game.stage as MainScene
-  mainScene.selectItem(selectedItem.value)
-}
 </script>
 
 <template>
@@ -50,25 +40,22 @@ function selectItem(item: IBuildItem) {
   <div class="hud">
     <p v-if="loadingAssets">载入资源中 {{ (loadingProgress * 100).toFixed(0) }}%</p>
 
-    <div class="tile-info" v-if="selectedTile" style="position: fixed;"
-      :style="{ left: `calc(${selectedTile.worldx}px - 10rem)`, top: `calc(${selectedTile.worldy}px - 10rem - 30px)` }">
-      {{ selectedTile }}
-      <button>出售</button>
-    </div>
+    <TilePanel v-if="selectedTile" :selectedTile="selectedTile" :isTarget="false"></TilePanel>
+    <TilePanel v-if="selectedTargetTile" :selectedTile="selectedTargetTile" :isTarget="true"></TilePanel>
 
-    <div class="right-bar">
+    <div class="right-bar" v-if="!store.linkData">
       <div v-if="selectedItem" class="item-detail">
-        <img :src="selectedItem.iamge" width="40" height="40" />
+        <img :src="tiles[selectedItem].image" width="40" height="40" />
         <div>
-          <h5>{{ selectedItem.name }}</h5>
-          <p style="color: gray;">{{ selectedItem.describe }}</p>
+          <h5>{{ tiles[selectedItem].name }}</h5>
+          <p style="color: gray;">{{ tiles[selectedItem].describe }}</p>
         </div>
       </div>
 
       <div class="build-panel">
         <!-- 分类按钮 -->
         <div style="display: flex; gap: 0.25rem;">
-          <button v-for="categoryName in Object.keys(category)" :key="categoryName" style="flex: 1"
+          <button v-for="categoryName in Object.keys(items)" :key="categoryName" style="flex: 1"
             :class="{ active: selectedCategory === categoryName }" @click="selectCategory(categoryName)">
             {{ categoryName }}
           </button>
@@ -76,10 +63,10 @@ function selectItem(item: IBuildItem) {
 
         <!-- 物品网格 -->
         <div class="items-grid">
-          <button v-for="item in category[selectedCategory]" :key="item.id"
-            :class="{ active: selectedItem?.id === item.id }" @click="selectItem(item)">
-            <img :src="item.iamge" width="30" height="30">
-            <p style="margin: 0;">{{ item.name }}</p>
+          <button v-for="item in items[selectedCategory]" :key="item" :class="{ active: selectedItem === item }"
+            @click="mainStage.selectItem(item)">
+            <img :src="tiles[item].image" width="30" height="30">
+            <p style="margin: 0;">{{ tiles[item].name }}</p>
           </button>
         </div>
       </div>
@@ -152,31 +139,5 @@ function selectItem(item: IBuildItem) {
   border: 2px solid #000;
   margin-bottom: 0.5rem;
   border-right: none;
-}
-
-.tile-info {
-  background-color: white;
-  padding: 0.5rem;
-  border: 2px solid #000;
-  width: 20rem;
-  height: 10rem;
-  position: relative;
-  pointer-events: all;
-}
-
-/* 小三角 */
-.tile-info::after {
-  content: '';
-  position: absolute;
-  bottom: -10px;
-
-  left: 50%;
-
-  transform: translateX(-100%);
-  width: 0;
-  height: 0;
-  border-left: 10px solid transparent;
-  border-right: 10px solid transparent;
-  border-top: 10px solid rgb(0, 0, 0);
 }
 </style>
