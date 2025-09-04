@@ -5,7 +5,7 @@ import { GameObject } from "../GameObject";
 import { toCoords } from "../utils";
 import { Vec2 } from "../Vec2";
 import GameClient from "@/client";
-import type { Cell } from "../../../../server/src/rooms/schema/MyRoomState";
+import type { Cell, Entity, Item } from "../../../../server/src/rooms/schema/MyRoomState";
 import { tiles } from "../datas";
 
 export enum IO_TYPE {
@@ -32,6 +32,10 @@ class Grid extends GameObject {
         this.cell[block.id] = block
         block.gotoCell(cell, this)
         this.addChild(block)
+    }
+    removeBlock(id: string) {
+        this.getBlockById(id).destory()
+        delete this.cell[id]
     }
 
     render(ctx: CanvasRenderingContext2D): void {
@@ -146,11 +150,12 @@ export interface ISelectedTile {
     worldy: number,
 }
 
-export class Tile extends GameObject {
+export class GameTile extends GameObject {
     image!: HTMLCanvasElement
     cell: Vec2 = new Vec2
     id: string = ''
     prototypeId!: string
+    drawArc: boolean = false
 
     constructor(game: Game, id: string, prototypeId?: string) {
         super(game);
@@ -165,6 +170,7 @@ export class Tile extends GameObject {
     setPrototypeId(prototypeId: string) {
         this.prototypeId = prototypeId
         this.image = this.asset(tiles[prototypeId].image) as HTMLCanvasElement
+        this.drawArc = tiles[prototypeId].drawArc
     }
 
     render(ctx: CanvasRenderingContext2D): void {
@@ -173,6 +179,15 @@ export class Tile extends GameObject {
             ctx.fillRect(0, 0, 64, 64);
         } else {
             const image = this.image
+            if (this.drawArc) {
+                ctx.beginPath()
+                ctx.arc(32, 32, 24, 0, Math.PI * 2)
+                ctx.fillStyle = "#fff"
+                ctx.fill()
+                ctx.lineWidth = 3
+                ctx.strokeStyle = "#000"
+                ctx.stroke()
+            }
             ctx.drawImage(image, (64 - image.width) / 2, (64 - image.height) / 2)
         }
     }
@@ -201,11 +216,30 @@ export class Tile extends GameObject {
     }
 }
 
-export class RemoteTile extends Tile {
+export class RemoteTile extends GameTile {
     cellData: Cell
+    hp: number
+    maxHp: number
+    hpObj: Hp
+
     constructor(game: Game, cell: Cell, id: string) {
         super(game, id, cell.prototypeId)
         this.cellData = cell
+
+        this.hp = cell.hp
+        this.maxHp = cell.maxHp
+        const client = mainStage.client
+
+        this.hpObj = new Hp(this.game)
+        this.hpObj.maxHp = this.maxHp
+        this.hpObj.x = 16
+        this.hpObj.y = 0
+        this.addChild(this.hpObj)
+
+        client.$(cell).listen("hp", (hp) => {
+            this.hp = hp
+            this.hpObj.hp = hp
+        })
     }
 }
 
@@ -237,7 +271,7 @@ export class Wall extends RemoteTile {
     }
 }
 
-class BuildCusor extends Tile {
+class BuildCusor extends GameTile {
     canBuild: boolean = true
 
     constructor(game: Game) {
@@ -259,7 +293,7 @@ class BuildCusor extends Tile {
     }
 }
 
-class SelectedCusor extends Tile {
+class SelectedCusor extends GameTile {
     constructor(game: Game) {
         super(game, 'select')
     }
@@ -272,14 +306,63 @@ class SelectedCusor extends Tile {
     }
 }
 
-class Entity extends GameObject {
+class Hp extends GameObject {
+    maxHp: number = 1
+    hp: number = 1
+
+    render(ctx: CanvasRenderingContext2D): void {
+        if (this.hp == this.maxHp) {
+            return
+        }
+        const w = 32
+
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, w + 2, 2 + 3);
+        ctx.lineWidth = 2
+
+        ctx.fillStyle = "#0f0";
+        ctx.fillRect(1, 1, (this.hp / this.maxHp) * w, 3);
+        ctx.lineWidth = 2
+    }
+}
+
+class GameEntity extends GameObject {
+    hp: number
+    maxHp: number
+    hpObj: Hp
+
     render(ctx: CanvasRenderingContext2D): void {
         const image = this.asset("zombie")!
         ctx.drawImage(image, image.width / -2, image.height / -2)
     }
     protected onUpdate(deltaTime: number): void {
-        this.rotation += deltaTime * Math.PI
         this.setDirty()
+    }
+    constructor(entity: Entity, game: Game) {
+        super(game)
+        this.x = entity.x
+        this.y = entity.y
+        this.maxHp = entity.maxHp
+        this.hp = entity.hp
+
+        this.hpObj = new Hp(this.game)
+        this.hpObj.maxHp = this.maxHp
+        this.hpObj.x = -17
+        this.hpObj.y = -30
+
+        this.addChild(this.hpObj)
+
+        const clinet = mainStage.client
+        clinet.$(entity).listen("hp", (hp) => {
+            this.hp = hp
+            this.hpObj.hp = hp
+        })
+        clinet.$(entity).listen("x", (x) => {
+            this.x = x * 64 + 32
+        })
+        clinet.$(entity).listen("y", (y) => {
+            this.y = y * 64 + 32
+        })
     }
 }
 
@@ -292,30 +375,54 @@ class Lines extends GameObject {
     render(ctx: CanvasRenderingContext2D): void {
         const isSmall = this.getCamera().zoom < 0.3
         const state = mainStage.client.state
+
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.font = '48px serif'
         Object.values(this.gird.cell).forEach(tile => {
             tile.cellData.output.forEach((connectId, slot) => {
                 const connect = state.connects.get(connectId)!
-                const s = tile.getGlobalPosition()
-                const t = this.gird.getBlockById(connect.targetCellId).getGlobalPosition()
-                const dir = t.clone().subtract(s).normalize()
+                const s = tile.getGlobalPosition().add(new Vec2(32, 32))
+                const t = this.gird.getBlockById(connect.targetCellId).getGlobalPosition().add(new Vec2(32, 32))
 
+                const dir = t.clone().subtract(s).clone().normalize()
                 t.add(dir.clone().multiplyScalar(-32))
                 s.add(dir.clone().multiplyScalar(32))
+                const angle = Math.atan2(t.y - s.y, t.x - s.x)
+                const length = t.clone().subtract(s).length()
+
+                ctx.save()
+                ctx.translate(s.x, s.y)
+                ctx.rotate(angle)
 
                 ctx.beginPath()
-                ctx.lineWidth = 15
+                ctx.lineWidth = 2
                 ctx.strokeStyle = "#3f3f3fff"
-                ctx.moveTo(s.x + 32, s.y + 32)
-                ctx.lineTo(t.x + 32, t.y + 32)
+                ctx.moveTo(0, 0)
+                ctx.lineTo(length, 0)
+                ctx.lineTo(length - 10, 10)
+                ctx.moveTo(length, 0)
+                ctx.lineTo(length - 10, -10)
+
+
                 ctx.stroke()
-                if (!isSmall) {
-                    ctx.beginPath()
-                    ctx.lineWidth = 10
-                    ctx.strokeStyle = "#989898ff"
-                    ctx.moveTo(s.x + 32, s.y + 32)
-                    ctx.lineTo(t.x + 32, t.y + 32)
-                    ctx.stroke()
-                }
+
+                ctx.restore()
+
+                // ctx.beginPath()
+                // ctx.lineWidth = 2
+                // ctx.strokeStyle = "#3f3f3fff"
+                // ctx.moveTo(s.x + 32, s.y + 32)
+                // ctx.lineTo(t.x + 32, t.y + 32)
+                // ctx.stroke()
+                // if (!isSmall) {
+                //     ctx.beginPath()
+                //     ctx.lineWidth = 20
+                //     ctx.strokeStyle = "#989898ff"
+                //     ctx.moveTo(s.x + 32, s.y + 32)
+                //     ctx.lineTo(t.x + 32, t.y + 32)
+                //     ctx.stroke()
+                // }
             })
         })
         if (!isSmall) {
@@ -335,7 +442,7 @@ class Lines extends GameObject {
     }
 }
 
-class Item extends GameObject {
+class GameItem extends GameObject {
     process: number = 0
     id: string
     name: string
@@ -343,12 +450,18 @@ class Item extends GameObject {
     emoji: string
 
     showText: boolean = false
-    constructor(name: string, id: string, connectId: string, emoji: string, game: Game) {
+
+    constructor(item: Item, id: string, game: Game) {
         super(game)
+
+        mainStage.client.$(item).listen("process", (process) => {
+            this.process = process
+        })
+
         this.id = id
-        this.name = name
-        this.emoji = emoji
-        this.connectId = connectId
+        this.name = item.name
+        this.emoji = item.emoji
+        this.connectId = item.connectId
     }
 
     protected onUpdate(deltaTime: number): void {
@@ -356,11 +469,9 @@ class Item extends GameObject {
         this.showText = mainStage.mousePosition.clone().subtract(this.getGlobalPosition()).length() < 30
     }
     render(ctx: CanvasRenderingContext2D): void {
-        ctx.fillStyle = "#000000ff"
-        const size = 32
+        const size = 28
+        ctx.fillStyle = "#3f3f3f1f"
         ctx.fillRect(-size / 2, -size / 2, size, size)
-        ctx.fillStyle = "#ffffffff"
-        ctx.fillRect(1 - size / 2, 1 - size / 2, size - 2, size - 2)
 
         ctx.fillStyle = "#000000ff"
         ctx.font = "24px serif";
@@ -375,7 +486,7 @@ class Item extends GameObject {
 
             const text = this.name;
             const x = 0;
-            const y = -25;
+            const y = -32;
 
             const metrics = ctx.measureText(text);
             const padding = 6;
@@ -395,8 +506,30 @@ class Item extends GameObject {
             ctx.fillText(text, x, y);
         }
     }
-    onChange(process: number) {
-        this.process = process
+}
+
+class Bullet extends GameObject {
+    speed: number = 0
+    end: Vec2 = new Vec2
+
+    render(ctx: CanvasRenderingContext2D): void {
+        ctx.fillStyle = "#000"
+        ctx.beginPath()
+        ctx.arc(-2, -2, 4, 0, Math.PI * 2)
+        ctx.fill()
+    }
+    protected onUpdate(deltaTime: number): void {
+        const dir = this.end.clone().subtract(this.position).normalize()
+
+        const move = dir.clone().multiplyScalar(this.speed * deltaTime)
+        this.position.add(move)
+
+        this.setDirty()
+        const toEnd = this.end.clone().subtract(this.position)
+        if (toEnd.dot(dir) <= 0) {
+            this.position = this.end.clone()
+            this.destory()
+        }
     }
 }
 
@@ -413,12 +546,12 @@ export class MainScene extends GameObject {
     client: GameClient
 
     selectedItem: string | null = null
-    selectedSourceTile: Tile | null = null
-    selectedTargetTile: Tile | null = null
+    selectedSourceTile: GameTile | null = null
+    selectedTargetTile: GameTile | null = null
 
     linkData: ILinkData | null = null
-    items: Map<string, Item> = new Map
-    entities: Map<string, Entity> = new Map
+    items: Map<string, GameItem> = new Map
+    entities: Map<string, GameEntity> = new Map
 
 
     mousePosition: Vec2 = new Vec2(0, 0)
@@ -531,17 +664,13 @@ export class MainScene extends GameObject {
         })
 
         clinet.$(stage).map.onRemove((_, id) => {
-            this.grid.getBlockById(id).destory()
+            this.grid.removeBlock(id)
         })
 
         clinet.$(stage).items.onAdd((item, id) => {
-            const itemObj = new Item(item.name, id, item.connectId, item.emoji, this.game)
+            const itemObj = new GameItem(item, id, this.game)
             this.addChild(itemObj)
             this.items.set(id, itemObj)
-
-            clinet.$(item).listen("process", (process) => {
-                itemObj.onChange(process)
-            })
         })
 
         clinet.$(stage).items.onRemove((item, id) => {
@@ -550,23 +679,42 @@ export class MainScene extends GameObject {
         })
 
         clinet.$(stage).entities.onAdd((entity, id) => {
-            const itemObj = new Entity(this.game)
-            itemObj.x = entity.x
-            itemObj.y = entity.y
+            const itemObj = new GameEntity(entity, this.game)
+            // itemObj.x = entity.x
+            // itemObj.y = entity.y
             this.addChild(itemObj)
             this.entities.set(id, itemObj)
 
-            clinet.$(entity).listen("x", (x) => {
-                itemObj.x = x
-            })
-            clinet.$(entity).listen("y", (y) => {
-                itemObj.y = y
-            })
+            // clinet.$(entity).listen("x", (x) => {
+            //     itemObj.x = x * 64 + 32
+            // })
+            // clinet.$(entity).listen("y", (y) => {
+            //     itemObj.y = y * 64 + 32
+            // })
+            // clinet.$(entity).listen("rotation", (rotation) => {
+            //     itemObj.rotation = rotation
+            // })
         })
 
         clinet.$(stage).entities.onRemove((entity, id) => {
             this.entities.get(id)?.destory()
             this.entities.delete(id)
+        })
+
+        clinet.room.onMessage("bullet", (data: {
+            startX: number,
+            startY: number,
+            endX: number,
+            endY: number,
+
+            speed: number
+        }) => {
+            const bullet = new Bullet(this.game)
+            bullet.x = data.startX * 64
+            bullet.y = data.startX * 64
+            bullet.speed = data.speed * 64
+            bullet.end = new Vec2(data.endX, data.endY).multiplyScalar(64)
+            this.addChild(bullet)
         })
     }
 
@@ -600,7 +748,7 @@ export class MainScene extends GameObject {
         this.game.store.selectItem(this.selectedItem)
     }
 
-    selectTile(tile: Tile | null) {
+    selectTile(tile: GameTile | null) {
         let targetTile = this.linkData ? this.selectedTargetTile : this.selectedSourceTile
         if (tile && targetTile != tile) {
             targetTile = tile
@@ -638,7 +786,7 @@ export class MainScene extends GameObject {
         this.selectItem(null)
     }
 
-    clickTile(block: Tile | null) {
+    clickTile(block: GameTile | null) {
         this.selectTile(block)
     }
 

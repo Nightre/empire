@@ -13,7 +13,7 @@ const loadingAssets = ref(true)
 const loadingProgress = ref(0)
 
 const store = useGameStore()
-const { selectedItem, selectedTile, selectedTargetTile } = storeToRefs(store)
+const { selectedItem, selectedTile, selectedTargetTile, roomState, roomSelfState } = storeToRefs(store)
 
 const selectedCategory = ref<string>(Object.keys(items)[0])
 
@@ -39,6 +39,7 @@ function selectCategory(name: string) {
   <canvas ref="canvasElm"></canvas>
   <div class="hud">
     <p v-if="loadingAssets">载入资源中 {{ (loadingProgress * 100).toFixed(0) }}%</p>
+    <p v-if="!roomSelfState?.hasHome">请建造一个家后开始游戏（推荐在资源附近建造）</p>
 
     <TilePanel v-if="selectedTile" :selectedTile="selectedTile" :isTarget="false"></TilePanel>
     <TilePanel v-if="selectedTargetTile" :selectedTile="selectedTargetTile" :isTarget="true"></TilePanel>
@@ -64,7 +65,7 @@ function selectCategory(name: string) {
         <!-- 物品网格 -->
         <div class="items-grid">
           <button v-for="item in items[selectedCategory]" :key="item" :class="{ active: selectedItem === item }"
-            @click="mainStage.selectItem(item)">
+            @click="mainStage.selectItem(item)" :disabled="!(roomSelfState?.hasHome || item == 'home')" v-show="item != 'home' || !roomSelfState?.hasHome">
             <img :src="tiles[item].image" width="30" height="30">
             <p style="margin: 0;">{{ tiles[item].name }}</p>
           </button>

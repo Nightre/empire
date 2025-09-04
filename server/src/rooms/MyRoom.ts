@@ -1,6 +1,10 @@
+// MyRoom.ts
 import { Room, Client } from "@colyseus/core";
-import { MyRoomState, Player, Cell, Connect, Item, Entity } from "./schema/MyRoomState";
-import { v4 as uuidv4 } from "uuid";
+import { MyRoomState, Player, Cell, Connect, Item, Entity, TargetType } from "./schema/MyRoomState";
+import { Pathfinding } from "../Pathfinding";
+import { CombatSystem } from "./CombatSystem"; // <-- 导入 CombatSystem
+
+type Targetable = Cell | Connect | Entity;
 
 // 接口定义保持不变
 export interface IConnectMessage {
@@ -26,6 +30,9 @@ export class MyRoom extends Room<MyRoomState> {
     maxClients = 4;
     state = new MyRoomState(100, 80);
 
+    private readonly TARGET_DENSITY_WEIGHT = 20;
+    private readonly PERTURBATION_INTERVAL = 2;
+
     onCreate(options: any) {
         this.onMessage("connect", (client, message: IConnectMessage) => {
             this.handleConnection(message);
@@ -36,52 +43,212 @@ export class MyRoom extends Room<MyRoomState> {
         });
 
         this.onMessage("build", (client, message: IBuildMessage) => {
-            // 为 cell 添加一个唯一的 ID，这很重要
-            const cellId = uuidv4();
             const cell = new Cell().assign({ ...message });
-            this.state.map.set(cellId, cell);
+            cell.team.push(client.sessionId)
+            cell.team.push("player")
+
+            this.state.map.set(cell.id, cell);
+
+            if (message.prototypeId == 'home') {
+                this.state.players.get(client.sessionId).hasHome = true
+            }
         });
 
         // 游戏主循环：物品移动
         this.clock.setInterval(() => {
-            const dt = 100 / 1000; // 0.1 seconds
-
-            // 使用 for...of 循环遍历 keys 集合，这样可以在循环内部安全地删除项
+            const dt = 100 / 1000;
             const itemIds = Array.from(this.state.items.keys());
             for (const id of itemIds) {
                 const item = this.state.items.get(id);
                 if (!item) continue;
-
                 const connect = this.state.connects.get(item.connectId);
-
-                // 健壮性检查：如果连接不存在（可能已被删除），则删除该物品
                 if (!connect) {
                     this.state.items.delete(id);
                     continue;
                 }
-
                 item.move(dt);
-
-                // 物品到达终点
                 if (item.process >= connect.length) {
-                    // 在这里可以添加物品到达目标单元格的逻辑
-                    // ...
                     this.state.items.delete(id);
                 }
             }
+
+            this.broadcast('bullet', {
+                startX: 0,
+                startY: 0,
+                endX: 5,
+                endY: 5,
+
+                speed: 5,
+            })
         }, 100);
 
         // 游戏主循环：资源生成
         this.clock.setInterval(() => {
             this.state.map.forEach((cell) => {
-                cell.output.forEach((connectId) => {
-                    // 从 cell 的 output map 中得到 connectId
-                    this.addItem(connectId, "钢筋", "🪴");
-                });
+                if (cell.prototypeId === 'resource') { // Example: only resource cells generate items
+                    cell.output.forEach((connectId) => {
+                        this.addItem(connectId, "资源", "💎");
+                    });
+                }
             });
-        }, 2000); // 降低频率以方便观察
+        }, 2000);
 
-        this.addEntity(0, 0)
+        // 主更新循环
+        this.clock.setInterval(() => this.updateGame(), 50); // ~20 FPS server tick
+
+        // 添加一些实体用于测试
+
+        this.addEntity(1, 5, ["monster"], ["player"]);
+        this.addEntity(1, 6, ["monster"], ["player"]);
+        this.addEntity(1, 7, ["monster"], ["player"]);
+
+        this.addEntity(3, 9, ["player"], ["monster"]);
+
+    }
+
+    updateGame() {
+        const dt = this.clock.deltaTime / 1000;
+        this.updateEntities(dt);
+    }
+
+    updateEntities(dt: number) {
+        // 1. 准备工作
+        const obstacles = new Set<string>();
+        this.state.map.forEach(cell => {
+            obstacles.add(`${Math.round(cell.x)}_${Math.round(cell.y)}`);
+        });
+        const pathfinder = new Pathfinding(this.state.width, this.state.height, obstacles);
+
+        const targetCounts = new Map<string, number>();
+        this.state.entities.forEach(entity => {
+            if (entity.targetId) {
+                targetCounts.set(entity.targetId, (targetCounts.get(entity.targetId) || 0) + 1);
+            }
+        });
+
+        // 2. 遍历并更新每个实体
+        this.state.entities.forEach(entity => {
+            // 更新冷却
+            if (entity.attackCooldown > 0) {
+                entity.attackCooldown -= dt;
+            }
+
+            // 检查目标有效性
+            let targetIsValid = CombatSystem.isTargetValid(entity.targetId, entity.targetType, this.state);
+
+            // 如果目标无效，寻找新目标
+            if (!targetIsValid) {
+                const newTarget = CombatSystem.findBestTarget(entity, this.state, targetCounts, this.TARGET_DENSITY_WEIGHT);
+                if (newTarget) {
+                    entity.targetId = newTarget.targetId;
+                    entity.targetType = newTarget.targetType;
+                    entity.path = []; // 清空旧路径
+                } else {
+                    this.clearEntityTarget(entity);
+                }
+            }
+
+            if (entity.targetId !== null && entity.targetType !== null) {
+                const targetObject = this.getTargetObject(entity.targetId, entity.targetType);
+                if (!targetObject) {
+                    this.clearEntityTarget(entity);
+                    return;
+                }
+
+                const targetPos = CombatSystem.getTargetPosition(targetObject, entity.targetType, this.state);
+                if (targetPos) {
+                    const path = pathfinder.findPath(entity.x, entity.y, targetPos.x, targetPos.y);
+                    if (path && path.length > 1) {
+                        path.shift();
+                        entity.path = path;
+                    }
+                }
+
+                const inRange = CombatSystem.isTargetInRange(entity, targetObject, entity.targetType, this.state);
+                if (inRange) {
+                    entity.path = [];
+                    this.performAttack(entity, targetObject, entity.targetType);
+                } else {
+                    if (entity.path && entity.path.length > 0) {
+                        this.moveEntity(entity, dt);
+                    }
+                }
+            }
+        });
+    }
+
+    private performAttack(attacker: Entity, target: Targetable, targetType: TargetType) {
+        if (attacker.attackCooldown <= 0) {
+            target.hp -= attacker.damage;
+
+            attacker.attackCooldown = attacker.attackSpeed;
+
+            if (target.hp <= 0) {
+                this.destroyTarget(target, targetType);
+                this.clearEntityTarget(attacker);
+            }
+        }
+    }
+
+    private destroyTarget(target: Targetable, targetType: TargetType) {
+        switch (targetType) {
+            case TargetType.CELL:
+                this.destroyCell((target as Cell).id);
+                break;
+            case TargetType.CONNECT:
+                this._breakConnection((target as Connect).id);
+                break;
+            case TargetType.ENTITY:
+                this.destroyEntity((target as Entity).id);
+                break;
+        }
+    }
+
+    private getTargetObject(targetId: string, targetType: TargetType): Targetable | null {
+        switch (targetType) {
+            case TargetType.CELL:
+                return this.state.map.get(targetId) || null;
+            case TargetType.CONNECT:
+                return this.state.connects.get(targetId) || null;
+            case TargetType.ENTITY:
+                return this.state.entities.get(targetId) || null;
+            default:
+                return null;
+        }
+    }
+
+    private moveEntity(entity: Entity, dt: number) {
+        entity.perturbationTimer -= dt;
+        if (entity.perturbationTimer <= 0) {
+            entity.movementPerturbation = {
+                x: (Math.random() - 0.5) * 1,
+                y: (Math.random() - 0.5) * 1,
+            };
+            entity.perturbationTimer = this.PERTURBATION_INTERVAL * (0.8 + Math.random() * 0.4);
+        }
+
+        const nextWaypoint = entity.path[0];
+        const dx = nextWaypoint.x - entity.x;
+        const dy = nextWaypoint.y - entity.y;
+        const finalDx = dx + entity.movementPerturbation.x;
+        const finalDy = dy + entity.movementPerturbation.y;
+        const waypointDist = Math.hypot(finalDx, finalDy);
+
+        if (waypointDist > 0.1) {
+            const moveSpeed = entity.speed * dt;
+            entity.x += (finalDx / waypointDist) * moveSpeed;
+            entity.y += (finalDy / waypointDist) * moveSpeed;
+        } else {
+
+            entity.path.shift();
+            entity.perturbationTimer = 0;
+        }
+    }
+
+    private clearEntityTarget(entity: Entity) {
+        entity.targetId = null;
+        entity.targetType = null;
+        entity.path = [];
     }
 
     onJoin(client: Client, options: any) {
@@ -104,10 +271,8 @@ export class MyRoom extends Room<MyRoomState> {
         console.log("room", this.roomId, "disposing...");
     }
 
-
-    // REWRITTEN: addItem 现在接受 connectId
     addItem(connectId: string, name: string, emoji: string) {
-        if (!this.state.connects.has(connectId)) return; // 安全检查
+        if (!this.state.connects.has(connectId)) return;
 
         const item = new Item().assign({
             name,
@@ -115,18 +280,35 @@ export class MyRoom extends Room<MyRoomState> {
             emoji,
             process: 0
         });
-        this.state.items.set(uuidv4(), item);
+        this.state.items.set(item.id, item);
     }
 
-    addEntity(x: number, y: number) {
-        const entity = new Entity().assign({
-            x,
-            y
-        });
-        this.state.entities.set(uuidv4(), entity);
+    addEntity(x: number, y: number, team: string[], enemyTeam: string[] = ["player"]) {
+        const entity = new Entity().assign({ x, y });
+        team.forEach(t => entity.team.push(t));
+        enemyTeam.forEach(t => entity.enemyTeam.push(t));
+        this.state.entities.set(entity.id, entity);
     }
 
-    // REWRITTEN: 完全重写以适应新结构
+    private destroyCell(cellId: string) {
+        const cell = this.state.map.get(cellId);
+        if (!cell) return;
+
+        const inputKeys = Array.from(cell.input.keys());
+        inputKeys.forEach(key => this._breakConnectionAtSlot(cell, key, 'input'));
+
+        const outputKeys = Array.from(cell.output.keys());
+        outputKeys.forEach(key => this._breakConnectionAtSlot(cell, key, 'output'));
+
+        this.state.map.delete(cellId);
+    }
+
+    private destroyEntity(entityId: string) {
+        if (this.state.entities.has(entityId)) {
+            this.state.entities.delete(entityId);
+        }
+    }
+
     private handleConnection({ sourceCellId, sourceSlotKey, targetCellId, targetSlotKey }: IConnectMessage) {
         if (sourceCellId === targetCellId) return;
 
@@ -134,11 +316,9 @@ export class MyRoom extends Room<MyRoomState> {
         const targetCell = this.state.map.get(targetCellId);
         if (!sourceCell || !targetCell) return;
 
-        // 断开即将被占用的插槽上的任何旧连接
         this._breakConnectionAtSlot(sourceCell, sourceSlotKey, 'output');
         this._breakConnectionAtSlot(targetCell, targetSlotKey, 'input');
 
-        // 创建一个代表整条线的 Connect 对象
         const newConnection = new Connect().assign({
             sourceCellId,
             sourceSlotKey,
@@ -147,27 +327,20 @@ export class MyRoom extends Room<MyRoomState> {
         });
         newConnection.calcLength(this.state);
 
-        // 1. 将新连接添加到全局 connects map
         this.state.connects.set(newConnection.id, newConnection);
 
-        // 2. 在源和目标单元格中存储新连接的 ID
         sourceCell.output.set(sourceSlotKey, newConnection.id);
         targetCell.input.set(targetSlotKey, newConnection.id);
-
-        console.log(`Successfully connected ${sourceCellId}:${sourceSlotKey} -> ${targetCellId}:${targetSlotKey} with ID ${newConnection.id}`);
     }
 
-    // REWRITTEN: 逻辑更简单，因为它现在可以复用 _breakConnectionAtSlot
     private handleDisconnection({ cellId, slotKey, type }: IDisconnectMessage) {
         const cell = this.state.map.get(cellId);
         if (!cell) {
-            console.warn(`Disconnection failed: Cell with ID ${cellId} not found.`);
             return;
         }
         this._breakConnectionAtSlot(cell, slotKey, type);
     }
 
-    // HELPER: 这是一个通用的辅助函数，用于断开指定插槽上的连接
     private _breakConnectionAtSlot(cell: Cell, slotKey: string, type: 'input' | 'output') {
         const connectMap = (type === 'input') ? cell.input : cell.output;
         const connectId = connectMap.get(slotKey);
@@ -177,27 +350,21 @@ export class MyRoom extends Room<MyRoomState> {
         }
     }
 
-    // CORE HELPER: 这是断开连接的核心逻辑，现在是唯一的
     private _breakConnection(connectId: string) {
         const connection = this.state.connects.get(connectId);
-        if (!connection) return; // 连接已不存在
+        if (!connection) return;
 
         const sourceCell = this.state.map.get(connection.sourceCellId);
         const targetCell = this.state.map.get(connection.targetCellId);
 
-        // 从源单元格移除引用
         if (sourceCell) {
             sourceCell.output.delete(connection.sourceSlotKey);
         }
 
-        // 从目标单元格移除引用
         if (targetCell) {
             targetCell.input.delete(connection.targetSlotKey);
         }
 
-        // 从全局 map 中删除连接对象本身
         this.state.connects.delete(connectId);
-
-        console.log(`Connection ${connectId} has been broken.`);
     }
 }

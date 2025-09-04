@@ -1,5 +1,6 @@
 import { Client, getStateCallbacks, Room } from "colyseus.js";
 import { MyRoomState } from "../../server/src/rooms/schema/MyRoomState"
+import { useGameStore } from "./stores/game";
 
 
 
@@ -26,6 +27,13 @@ class GameClient {
         await new Promise<void>((resolve) => {
             room.onStateChange.once(() => resolve());
         });
+
+        const store = useGameStore()
+
+        store.roomState = this.state.toJSON()
+        this.$(this.state.players.get(room.sessionId)!).onChange(() => {
+            store.roomSelfState = this.state.players.get(room.sessionId)?.toJSON()
+        })
     }
 
     getPlayerState(sessionId?: string) {
